@@ -1,8 +1,9 @@
 import { Schema, Types, ClientSession } from 'mongoose';
 import { AuditTrailPluginOptions, AuditRecord } from '../context/types';
+import { AuditError } from '../context/errors';
 import { deep_diff } from './deep_diff';
 import { has_only_plain_fields, collect_update_paths, filter_changes_by_paths } from './helpers';
-import { isAuditEnabled, getAuditUserId, getAuditInitiator } from '../context/user_context';
+import { isAuditEnabled, getAuditModifiedBy, getAuditSource } from '../context/user_context';
 import { get_transaction_session, with_session } from './transaction';
 import { build_record, write_history_records, handle_history_error, log_history_warning, get_omit_paths } from './record';
 
@@ -504,7 +505,7 @@ export function auditTrailPlugin(schema: Schema, options: AuditTrailPluginOption
     s.statics.bulkWrite = async function (this: any, operations: any[], bulk_options?: any) {
         const original: any = Object.getPrototypeOf(this)?.bulkWrite ?? this?.base?.Model?.bulkWrite;
         if (typeof original !== 'function') {
-            throw new Error('AuditTrailPlugin: original Model.bulkWrite is not available');
+            throw new AuditError('AuditTrailPlugin: original Model.bulkWrite is not available');
         }
         if (!isAuditEnabled()) {
             return original.call(this, operations, bulk_options);
@@ -630,4 +631,4 @@ export function auditTrailPlugin(schema: Schema, options: AuditTrailPluginOption
 
 // Re-exported for tests and advanced consumers that build records manually.
 export { build_record, write_history_records };
-export { getAuditUserId, getAuditInitiator };
+export { getAuditModifiedBy, getAuditSource };

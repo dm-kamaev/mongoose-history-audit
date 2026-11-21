@@ -1,7 +1,8 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { Types } from 'mongoose';
-import { SYSTEM_AUDIT_USER_ID } from './constants';
-import { AuditInitiator, AuditLogger } from './types';
+import { SYSTEM_AUDIT_MODIFIED_BY } from './constants';
+import { AuditError } from './errors';
+import { AuditSource } from './types';
 
 /**
  * Context of the current audit operation, resolved by the consumer.
@@ -12,8 +13,8 @@ import { AuditInitiator, AuditLogger } from './types';
  */
 export interface AuditContext {
     enabled: boolean;
-    userId?: Types.ObjectId | string | null;
-    initiator?: AuditInitiator;
+    modifiedBy?: Types.ObjectId | string | null;
+    source?: AuditSource;
 }
 
 export type AuditContextResolver = () => AuditContext | undefined;
@@ -22,33 +23,34 @@ let resolver: AuditContextResolver | undefined;
 
 const scoped_context = new AsyncLocalStorage<AuditContext>();
 
-const known_initiators = new Set<string>(Object.values(AuditInitiator));
+const BUILT_IN_SOURCES = ['http', 'cron', 'cli', 'rabbitmq'];
+
+const known_sources = new Set<string>(BUILT_IN_SOURCES);
 
 /**
- * Registers extra initiator names accepted by validation.
- * The values themselves are plain strings — registering only silences the
- * "unknown initiator" warning; unregistered values are still written to the
- * record unchanged. Idempotent, additive; call once at application startup.
+ * Registers extra source names accepted by validation. Required before a
+ * custom channel (e.g. `'kafka'`) can be used — an unregistered value throws.
+ * Idempotent, additive; call once at application startup.
  */
-export function registerAuditInitiators(...names: string[]): void {
+export function registerAuditSources(...names: string[]): void {
     for (const name of names) {
         if (name) {
-            known_initiators.add(name);
+            known_sources.add(name);
         }
     }
 }
 
-/** Removes registered initiator names. Intended for tests. */
-export function resetAuditInitiators(): void {
-    known_initiators.clear();
-    for (const name of Object.values(AuditInitiator)) {
-        known_initiators.add(name);
+/** Removes registered source names. Intended for tests. */
+export function resetAuditSources(): void {
+    known_sources.clear();
+    for (const name of BUILT_IN_SOURCES) {
+        known_sources.add(name);
     }
 }
 
-/** Reports whether an initiator is known (built-in or registered). */
-export function isKnownInitiator(name: string): boolean {
-    return known_initiators.has(name);
+/** Reports whether an source is known (built-in or registered). */
+export function isKnownSource(name: string): boolean {
+    return known_sources.has(name);
 }
 
 /**
@@ -84,23 +86,23 @@ export function isAuditEnabled(): boolean {
     return Boolean(getAuditContext()?.enabled);
 }
 
-export function getAuditUserId(): Types.ObjectId | null {
-    const raw = getAuditContext()?.userId;
+export function getAuditModifiedBy(): Types.ObjectId | null {
+    const raw = getAuditContext()?.modifiedBy;
     if (raw === null || raw === undefined) {
-        return SYSTEM_AUDIT_USER_ID;
+        return SYSTEM_AUDIT_MODIFIED_BY;
     }
     if (raw instanceof Types.ObjectId) {
         return raw;
     }
-    return Types.ObjectId.isValid(raw) ? new Types.ObjectId(raw) : SYSTEM_AUDIT_USER_ID;
+    return Types.ObjectId.isValid(raw) ? new Types.ObjectId(raw) : SYSTEM_AUDIT_MODIFIED_BY;
 }
 
-export function getAuditInitiator(): AuditInitiator | undefined {
-    return getAuditContext()?.initiator;
+export function getAuditSource(): AuditSource | undefined {
+    return getAuditContext()?.source;
 }
 
 /**
- * Runs `fn` with a fixed audit context (e.g. `{ enabled: true, userId, initiator: 'http' }`).
+ * Runs `fn` with a fixed audit context (e.g. `{ enabled: true, modifiedBy, source: 'http' }`).
  * The context is scoped to `fn` via `AsyncLocalStorage`: concurrent operations
  * outside `fn` keep reading the registered resolver, and overlapping calls do
  * not affect each other. This is the primary way to set `modified_by`.
@@ -111,7 +113,10 @@ export function getAuditInitiator(): AuditInitiator | undefined {
  * it — mongoose runs pre/post hooks when `.then()` is called, so without this
  * a query created inside the scope but awaited outside would lose the context.
  */
-export function runWithAuditContext<T>(context: AuditContext & { initiator: AuditInitiator }, fn: () => T): T {
+export function runWithAuditContext<T>(context: AuditContext & { source: AuditSource }, fn: () => T): T {
+    if (context.source !== undefined) {
+        assertAuditSource(context.source);
+    }
     const result = scoped_context.run(context, fn);
     if (result && typeof (result as any).then === 'function') {
         return scoped_context.run(context, () => Promise.resolve(result)) as T;
@@ -119,38 +124,22 @@ export function runWithAuditContext<T>(context: AuditContext & { initiator: Audi
     return result;
 }
 
-/**
- * Convenience wrapper around `runWithAuditContext` that pins `userId`
- * (the person who changed the data) and keeps the rest of the context
- * (initiator) from the ambient scope when present.
- */
-export async function withHistoryUser<T>(userId: Types.ObjectId | string | null, fn: () => Promise<T>): Promise<T> {
-    const current = getAuditContext();
-    return runWithAuditContext(
-        {
-            enabled: true,
-            userId,
-            initiator: current?.initiator ?? AuditInitiator.cli,
-        },
-        fn,
-    );
+/** Throws when `name` is not a built-in or registered source. */
+export function assertAuditSource(name: string): void {
+    if (!isKnownSource(name)) {
+        throw new AuditError(`Unknown audit source "${name}". Register it with registerAuditSources("${name}") at application startup.`);
+    }
 }
 
 /**
- * Validates `initiator` against the known + registered set. Unknown values
- * produce a warning through `logger` but are returned unchanged — the audit
- * trail must record the real channel, not a fallback.
+ * Resolves `source` (literal or thunk) to a registered name.
+ * `undefined`/`null` fall back to `'cli'`; an unregistered value throws.
  */
-export function resolveInitiator(
-    value: AuditInitiator | string | (() => AuditInitiator | string | undefined),
-    logger?: AuditLogger,
-): AuditInitiator {
+export function resolveSource(value: AuditSource | (() => AuditSource | string | undefined)): AuditSource {
     const raw = typeof value === 'function' ? value() : value;
     if (raw === undefined || raw === null) {
-        return AuditInitiator.cli;
+        return 'cli';
     }
-    if (!isKnownInitiator(raw)) {
-        logger?.warn?.(`initiator "${raw}" is not registered; register it with registerAuditInitiators() to silence this warning`);
-    }
+    assertAuditSource(raw);
     return raw;
 }

@@ -7,8 +7,8 @@
     "rules": [
         "History collection document fields are snake_case (collection_name, document_id, modified_by, created_at)",
         "Internal functions and files use snake_case; the public API (exports, options) uses camelCase",
-        "Set the user who changed the data via runWithAuditContext, withHistoryUser, or the framework interceptors",
-        "Register custom initiator channels (e.g. 'kafka') with registerAuditInitiators before use",
+        "Set modifiedBy (who changed the data) via runWithAuditContext or the framework interceptors",
+        "Register custom sources (e.g. 'kafka') with registerAuditSources before use; built-ins http/cron/cli/rabbitmq are pre-registered and unregistered values throw an Error",
         "Transactions require mongoose transactionAsyncLocalStorage for automatic session pickup"
     ]
 }

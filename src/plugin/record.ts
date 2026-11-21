@@ -1,6 +1,6 @@
 import { ClientSession } from 'mongoose';
-import { AuditLogger, AuditRecord, AuditTrailPluginOptions, AuditInitiator } from '../context/types';
-import { getAuditInitiator, getAuditUserId } from '../context/user_context';
+import { AuditLogger, AuditRecord, AuditTrailPluginOptions } from '../context/types';
+import { assertAuditSource, getAuditSource, getAuditModifiedBy } from '../context/user_context';
 
 const logged_errors = new WeakSet<object>();
 
@@ -65,6 +65,9 @@ export function build_record(
     old_document?: Record<string, any>,
     current_document?: Record<string, any>,
 ): AuditRecord {
+    const source = getAuditSource() ?? 'http';
+    assertAuditSource(source);
+
     const record: AuditRecord = {
         collection_name,
         model_name,
@@ -72,8 +75,8 @@ export function build_record(
         action,
         method,
         changes,
-        modified_by: getAuditUserId(),
-        initiator: getAuditInitiator() ?? AuditInitiator.http,
+        modified_by: getAuditModifiedBy(),
+        source,
         created_at: new Date(),
     };
 

@@ -1,20 +1,18 @@
-import { AuditInitiator, AuditLogger } from '../context/types';
-import { resolveInitiator, runWithAuditContext } from '../context/user_context';
+import { AuditSource } from '../context/types';
+import { resolveSource, runWithAuditContext } from '../context/user_context';
 
 export interface AuditContextOptions {
-    initiator?: AuditInitiator | (() => AuditInitiator | string | undefined);
-    userId?: any;
-    logger?: AuditLogger;
+    source?: AuditSource | (() => AuditSource | string | undefined);
+    modifiedBy?: any;
 }
 
 /**
  * Runs the decorated command handler inside `runWithAuditContext`
- * with `{ enabled: true, userId, initiator }`. `initiator` is either a known
- * `AuditInitiator` member, a raw string (e.g. `'kafka'`, registered via
- * `registerAuditInitiators()`) or a function returning them (resolved at call
- * time: `() => process.env.HISTORY_INITIATOR`); unregistered raw values are
- * written through unchanged and reported through `options.logger`. Defaults to
- * `userId: null` (system record) and `initiator: 'cli'`.
+ * with `{ enabled: true, modifiedBy, source }`. `source` is either a
+ * registered name (built-ins `http`/`cron`/`cli`/`rabbitmq`, or a custom one
+ * added via `registerAuditSources()`) or a function returning one (resolved
+ * at call time: `() => process.env.HISTORY_SOURCE`); an unregistered value
+ * throws. Defaults to `modifiedBy: null` (system record) and `source: 'cli'`.
  *
  * Reflect metadata is copied onto the wrapper so decorators like nestjs-command's
  * `@Command`/`@Option` keep working regardless of stacking order.
@@ -26,8 +24,8 @@ export function AuditContext(options: AuditContextOptions = {}): MethodDecorator
             return runWithAuditContext(
                 {
                     enabled: true,
-                    userId: options.userId ?? null,
-                    initiator: resolveInitiator(options.initiator ?? AuditInitiator.cli, options.logger),
+                    modifiedBy: options.modifiedBy ?? null,
+                    source: resolveSource(options.source ?? 'cli'),
                 },
                 () => original.apply(this, args),
             );
@@ -49,8 +47,8 @@ export function AuditContext(options: AuditContextOptions = {}): MethodDecorator
  * Per-call options override the baked-in defaults (shallow merge):
  *
  * ```ts
- * const KafkaAuditContext = createAuditContextDecorator({ initiator: 'kafka' });
- * @KafkaAuditContext({ userId })
+ * const KafkaAuditContext = createAuditContextDecorator({ source: 'kafka' });
+ * @KafkaAuditContext({ modifiedBy })
  * async handle(msg) { ... }
  * ```
  */

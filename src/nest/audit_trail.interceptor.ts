@@ -2,10 +2,9 @@ import { CallHandler, ExecutionContext, Injectable, NestInterceptor } from '@nes
 import { Reflector } from '@nestjs/core';
 import { Observable } from 'rxjs';
 import { AUDIT_TRAIL_KEY, AuditTrailOptions } from './audit_trail.decorator';
-import { AuditInitiator } from '../context/types';
 import { AuditContext, runWithAuditContext } from '../context/user_context';
 
-function default_get_user_id(request: any): any {
+function default_get_modified_by(request: any): any {
     return request?.user?._id ?? request?.user?.id ?? null;
 }
 
@@ -14,7 +13,7 @@ function default_get_user_id(request: any): any {
  * Uses the library's own AsyncLocalStorage — no CLS dependency: the handler
  * subscription runs inside `runWithAuditContext`, so every mongoose write the
  * handler (or anything it awaits) performs sees
- * `{ enabled: true, userId, initiator: 'http' }`.
+ * `{ enabled: true, modifiedBy, source: 'http' }`.
  *
  * When the decorator is absent or disabled, the handler still runs inside a
  * context with `enabled: false` so a nested `runWithAuditContext` is the only
@@ -34,13 +33,13 @@ export class AuditTrailInterceptor implements NestInterceptor {
         const decorated = options !== false && options !== undefined;
         const enabled = decorated && is_http;
 
-        let audit_context: AuditContext & { initiator: AuditInitiator };
+        let audit_context: AuditContext & { source: string };
         if (enabled) {
             const request = context.switchToHttp().getRequest();
-            const extract = (options as AuditTrailOptions).getUserId ?? default_get_user_id;
-            audit_context = { enabled: true, userId: extract(request), initiator: AuditInitiator.http };
+            const extract = (options as AuditTrailOptions).getModifiedBy ?? default_get_modified_by;
+            audit_context = { enabled: true, modifiedBy: extract(request), source: 'http' };
         } else {
-            audit_context = { enabled: false, initiator: AuditInitiator.http };
+            audit_context = { enabled: false, source: 'http' };
         }
 
         return new Observable(subscriber => {

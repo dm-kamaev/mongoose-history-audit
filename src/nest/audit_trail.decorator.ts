@@ -7,17 +7,17 @@ export interface AuditTrailOptions {
      * Extracts the id of the person who changed the data from the request.
      * Defaults to `request.user._id ?? request.user.id ?? null`.
      */
-    getUserId?: (request: any) => any;
+    getModifiedBy?: (request: any) => any;
 }
 
 /**
  * Marks a route handler or controller class as audited: the `AuditTrailInterceptor`
- * reads this metadata and activates the audit context (`enabled: true`, `userId`
- * from the request, `initiator: 'http'`) for the duration of the handler.
+ * reads this metadata and activates the audit context (`enabled: true`, `modifiedBy`
+ * from the request, `source: 'http'`) for the duration of the handler.
  *
  * `@AuditTrail()` / `@AuditTrail(true)` — audit with the default user extraction,
  * `@AuditTrail(false)` — explicitly skip (also resets an inherited flag),
- * `@AuditTrail({ getUserId })` — custom extraction of the person who changed the data.
+ * `@AuditTrail({ getModifiedBy })` — custom extraction of the person who changed the data.
  * Without the decorator the interceptor explicitly disables the context so it
  * cannot leak from a previous request.
  */

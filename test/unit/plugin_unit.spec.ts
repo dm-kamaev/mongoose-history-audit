@@ -2,7 +2,7 @@ import { Types } from 'mongoose';
 import { build_record, ensure_upsert_document_id, write_history_records } from '../../src/plugin/audit_trail_plugin';
 import { get_transaction_session, with_session } from '../../src/plugin/transaction';
 import { resetAuditContextResolver, setAuditContextResolver } from '../../src/context/user_context';
-import { AuditInitiator, AuditTrailPluginOptions, AuditRecord } from '../../src/context/types';
+import { AuditTrailPluginOptions, AuditRecord } from '../../src/context/types';
 
 describe('ensure_upsert_document_id', () => {
     it('converts a plain update into operator form with an injected _id', () => {
@@ -153,28 +153,36 @@ describe('session resolution helpers', () => {
     });
 });
 
-describe('build_record (initiator and modified_by)', () => {
+describe('build_record (source and modified_by)', () => {
     const options: AuditTrailPluginOptions = { historyCollectionName: 'history' };
 
     afterEach(() => {
         resetAuditContextResolver();
     });
 
-    it('defaults initiator to http and modified_by to null without context', () => {
+    it('defaults source to http and modified_by to null without context', () => {
         const record = build_record('col', 'Model', new Types.ObjectId(), 'created', 'save', {}, options);
 
-        expect(record.initiator).toBe('http');
+        expect(record.source).toBe('http');
         expect(record.modified_by).toBeNull();
     });
 
-    it('takes initiator and modified_by from the context', () => {
-        const userId = new Types.ObjectId();
-        setAuditContextResolver(() => ({ enabled: true, userId, initiator: AuditInitiator.cron }));
+    it('takes source and modified_by from the context', () => {
+        const modifiedBy = new Types.ObjectId();
+        setAuditContextResolver(() => ({ enabled: true, modifiedBy, source: 'cron' }));
 
         const record = build_record('col', 'Model', new Types.ObjectId(), 'updated', 'updateMany', {}, options);
 
-        expect(record.initiator).toBe('cron');
-        expect(record.modified_by).toBe(userId);
+        expect(record.source).toBe('cron');
+        expect(record.modified_by).toBe(modifiedBy);
+    });
+
+    it('throws when the resolver supplies an unregistered source', () => {
+        setAuditContextResolver(() => ({ enabled: true, source: 'kafka' }));
+
+        expect(() => build_record('col', 'Model', new Types.ObjectId(), 'updated', 'updateMany', {}, options)).toThrow(
+            /registerAuditSources/,
+        );
     });
 });
 

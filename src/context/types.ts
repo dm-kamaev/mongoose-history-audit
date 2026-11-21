@@ -3,19 +3,12 @@ import { Types } from 'mongoose';
 export type AuditAction = 'created' | 'updated' | 'deleted';
 
 /**
- * Known initiator channels. The type is an open union: any string is accepted
- * so consumers can add their own channels (`'kafka'`, `'grpc'`, ...) without
- * waiting for a library release. Unknown values pass through to the record
- * unchanged; `registerAuditInitiators()` only affects validation warnings.
+ * Audit source — a plain open string. The validation registry
+ * (built-ins `http`/`cron`/`cli`/`rabbitmq` + `registerAuditSources()`)
+ * lives in `user_context.ts`; an unregistered value throws at context entry
+ * or record build.
  */
-export const AuditInitiator = {
-    http: 'http',
-    cron: 'cron',
-    cli: 'cli',
-    rabbitmq: 'rabbitmq',
-} as const;
-
-export type AuditInitiator = (typeof AuditInitiator)[keyof typeof AuditInitiator] | (string & {});
+export type AuditSource = string;
 
 export interface AuditChange {
     old: any;
@@ -37,7 +30,7 @@ export interface AuditRecord {
     old_document?: Record<string, any>;
     current_document?: Record<string, any>;
     modified_by: Types.ObjectId | null;
-    initiator: AuditInitiator;
+    source: AuditSource;
     metadata?: Record<string, any>;
     created_at: Date;
 }

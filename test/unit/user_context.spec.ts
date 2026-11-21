@@ -1,56 +1,55 @@
 import { Types } from 'mongoose';
+import { AuditError } from '../../src/context/errors';
 import {
     getAuditContext,
-    getAuditInitiator,
-    getAuditUserId,
+    getAuditSource,
+    getAuditModifiedBy,
     isAuditEnabled,
     resetAuditContextResolver,
     runWithAuditContext,
     setAuditContextResolver,
-    withHistoryUser,
-    registerAuditInitiators,
-    resetAuditInitiators,
-    isKnownInitiator,
-    resolveInitiator,
+    registerAuditSources,
+    resetAuditSources,
+    isKnownSource,
+    resolveSource,
 } from '../../src/context/user_context';
-import { AuditInitiator } from '../../src/context/types';
 
 describe('user_context (audit context resolver)', () => {
     afterEach(() => {
         resetAuditContextResolver();
-        resetAuditInitiators();
+        resetAuditSources();
     });
 
-    it('is disabled and has null userId when no resolver is registered', () => {
+    it('is disabled and has null modifiedBy when no resolver is registered', () => {
         expect(getAuditContext()).toBeUndefined();
         expect(isAuditEnabled()).toBe(false);
-        expect(getAuditUserId()).toBeNull();
+        expect(getAuditModifiedBy()).toBeNull();
     });
 
     it('reads context from the registered resolver', () => {
-        const userId = new Types.ObjectId('64e5faee64e5faee64e5faee');
-        setAuditContextResolver(() => ({ enabled: true, userId }));
-        expect(getAuditContext()).toEqual({ enabled: true, userId });
+        const modifiedBy = new Types.ObjectId('64e5faee64e5faee64e5faee');
+        setAuditContextResolver(() => ({ enabled: true, modifiedBy }));
+        expect(getAuditContext()).toEqual({ enabled: true, modifiedBy });
         expect(isAuditEnabled()).toBe(true);
-        expect(getAuditUserId()).toBe(userId);
+        expect(getAuditModifiedBy()).toBe(modifiedBy);
     });
 
-    it('converts a valid ObjectId string userId to ObjectId', () => {
+    it('converts a valid ObjectId string in modifiedBy to ObjectId', () => {
         const hex = '64e5faee64e5faee64e5faee';
-        setAuditContextResolver(() => ({ enabled: true, userId: hex }));
-        expect(getAuditUserId()).toBeInstanceOf(Types.ObjectId);
-        expect(String(getAuditUserId())).toBe(hex);
+        setAuditContextResolver(() => ({ enabled: true, modifiedBy: hex }));
+        expect(getAuditModifiedBy()).toBeInstanceOf(Types.ObjectId);
+        expect(String(getAuditModifiedBy())).toBe(hex);
     });
 
-    it('treats an invalid string userId as null (system record)', () => {
-        setAuditContextResolver(() => ({ enabled: true, userId: 'not-an-object-id' }));
-        expect(getAuditUserId()).toBeNull();
+    it('treats an invalid string modifiedBy as null (system record)', () => {
+        setAuditContextResolver(() => ({ enabled: true, modifiedBy: 'not-an-object-id' }));
+        expect(getAuditModifiedBy()).toBeNull();
     });
 
     it('treats a resolver returning undefined as disabled', () => {
         setAuditContextResolver(() => undefined);
         expect(isAuditEnabled()).toBe(false);
-        expect(getAuditUserId()).toBeNull();
+        expect(getAuditModifiedBy()).toBeNull();
     });
 
     it('treats a throwing resolver as disabled', () => {
@@ -58,7 +57,7 @@ describe('user_context (audit context resolver)', () => {
             throw new Error('boom');
         });
         expect(isAuditEnabled()).toBe(false);
-        expect(getAuditUserId()).toBeNull();
+        expect(getAuditModifiedBy()).toBeNull();
     });
 
     it('resetAuditContextResolver removes the resolver', () => {
@@ -67,23 +66,23 @@ describe('user_context (audit context resolver)', () => {
         expect(isAuditEnabled()).toBe(false);
     });
 
-    it('has no initiator when the context does not set one', () => {
+    it('has no source when the context does not set one', () => {
         setAuditContextResolver(() => ({ enabled: true }));
-        expect(getAuditInitiator()).toBeUndefined();
+        expect(getAuditSource()).toBeUndefined();
     });
 
-    it('reads initiator from the registered resolver', () => {
-        setAuditContextResolver(() => ({ enabled: true, initiator: AuditInitiator.cli }));
-        expect(getAuditInitiator()).toBe('cli');
+    it('reads source from the registered resolver', () => {
+        setAuditContextResolver(() => ({ enabled: true, source: 'cli' }));
+        expect(getAuditSource()).toBe('cli');
     });
 
-    it('accepts an unregistered custom initiator string', () => {
-        setAuditContextResolver(() => ({ enabled: true, initiator: 'kafka' }));
-        expect(getAuditInitiator()).toBe('kafka');
+    it('accepts an unregistered custom source string', () => {
+        setAuditContextResolver(() => ({ enabled: true, source: 'kafka' }));
+        expect(getAuditSource()).toBe('kafka');
     });
 
-    it('has no initiator without a resolver', () => {
-        expect(getAuditInitiator()).toBeUndefined();
+    it('has no source without a resolver', () => {
+        expect(getAuditSource()).toBeUndefined();
     });
 
     it('setAuditContextResolver returns the previously registered resolver', () => {
@@ -95,10 +94,10 @@ describe('user_context (audit context resolver)', () => {
     it('runWithAuditContext applies the context and leaves the resolver for calls outside the scope', async () => {
         setAuditContextResolver(() => ({ enabled: false }));
 
-        const result = await runWithAuditContext({ enabled: true, userId: null, initiator: AuditInitiator.cron }, async () => {
+        const result = await runWithAuditContext({ enabled: true, modifiedBy: null, source: 'cron' }, async () => {
             expect(isAuditEnabled()).toBe(true);
-            expect(getAuditInitiator()).toBe('cron');
-            expect(getAuditUserId()).toBeNull();
+            expect(getAuditSource()).toBe('cron');
+            expect(getAuditModifiedBy()).toBeNull();
             return 'done';
         });
 
@@ -110,7 +109,7 @@ describe('user_context (audit context resolver)', () => {
         setAuditContextResolver(() => ({ enabled: false }));
 
         await expect(
-            runWithAuditContext({ enabled: true, initiator: AuditInitiator.cli }, async () => {
+            runWithAuditContext({ enabled: true, source: 'cli' }, async () => {
                 throw new Error('boom');
             }),
         ).rejects.toThrow('boom');
@@ -118,21 +117,25 @@ describe('user_context (audit context resolver)', () => {
         expect(isAuditEnabled()).toBe(false);
     });
 
+    it('runWithAuditContext throws for an unregistered source', () => {
+        expect(() => runWithAuditContext({ enabled: true, source: 'kafka' }, () => undefined)).toThrow(/registerAuditSources/);
+    });
+
     it('runWithAuditContext isolates overlapping calls and does not swap the resolver', async () => {
-        setAuditContextResolver(() => ({ enabled: true, initiator: AuditInitiator.http }));
+        setAuditContextResolver(() => ({ enabled: true, source: 'http' }));
 
         let release_a!: () => void;
         let release_b!: () => void;
         const gate_a = new Promise<void>(resolve => (release_a = resolve));
         const gate_b = new Promise<void>(resolve => (release_b = resolve));
 
-        const a = runWithAuditContext({ enabled: true, initiator: AuditInitiator.cron }, async () => {
+        const a = runWithAuditContext({ enabled: true, source: 'cron' }, async () => {
             await gate_a;
-            return getAuditInitiator();
+            return getAuditSource();
         });
-        const b = runWithAuditContext({ enabled: true, initiator: AuditInitiator.cli }, async () => {
+        const b = runWithAuditContext({ enabled: true, source: 'cli' }, async () => {
             await gate_b;
-            return getAuditInitiator();
+            return getAuditSource();
         });
 
         release_a();
@@ -140,110 +143,72 @@ describe('user_context (audit context resolver)', () => {
 
         expect(await a).toBe('cron');
         expect(await b).toBe('cli');
-        expect(getAuditInitiator()).toBe('http');
-    });
-
-    it('withHistoryUser pins the userId (person who changed the data)', async () => {
-        const user_a = new Types.ObjectId();
-        const user_b = new Types.ObjectId();
-
-        await withHistoryUser(user_a, async () => {
-            expect(getAuditUserId()).toBe(user_a);
-        });
-        await withHistoryUser(user_b, async () => {
-            expect(getAuditUserId()).toBe(user_b);
-        });
-
-        expect(getAuditUserId()).toBeNull();
-    });
-
-    it('withHistoryUser keeps the ambient initiator and re-enables the context', async () => {
-        setAuditContextResolver(() => ({ enabled: false, initiator: AuditInitiator.http }));
-
-        await withHistoryUser(new Types.ObjectId(), async () => {
-            expect(isAuditEnabled()).toBe(true);
-            expect(getAuditInitiator()).toBe('http');
-        });
-
-        expect(isAuditEnabled()).toBe(false);
-    });
-
-    it('withHistoryUser defaults initiator to cli outside any scope', async () => {
-        await withHistoryUser(null, async () => {
-            expect(getAuditInitiator()).toBe('cli');
-        });
+        expect(getAuditSource()).toBe('http');
     });
 });
 
-describe('initiator registry', () => {
+describe('source registry', () => {
     afterEach(() => {
-        resetAuditInitiators();
+        resetAuditSources();
     });
 
-    it('knows the four built-in initiators', () => {
+    it('knows the four built-in sources', () => {
         for (const name of ['http', 'cron', 'cli', 'rabbitmq']) {
-            expect(isKnownInitiator(name)).toBe(true);
+            expect(isKnownSource(name)).toBe(true);
         }
     });
 
-    it('does not know unregistered custom initiators', () => {
-        expect(isKnownInitiator('kafka')).toBe(false);
+    it('does not know unregistered custom sources', () => {
+        expect(isKnownSource('kafka')).toBe(false);
     });
 
-    it('registerAuditInitiators adds names', () => {
-        registerAuditInitiators('kafka', 'grpc');
-        expect(isKnownInitiator('kafka')).toBe(true);
-        expect(isKnownInitiator('grpc')).toBe(true);
+    it('registerAuditSources adds names', () => {
+        registerAuditSources('kafka', 'grpc');
+        expect(isKnownSource('kafka')).toBe(true);
+        expect(isKnownSource('grpc')).toBe(true);
     });
 
-    it('registerAuditInitiators is additive and ignores empty names', () => {
-        registerAuditInitiators('kafka');
-        registerAuditInitiators('grpc', '');
-        expect(isKnownInitiator('kafka')).toBe(true);
-        expect(isKnownInitiator('grpc')).toBe(true);
-        expect(isKnownInitiator('http')).toBe(true);
+    it('registerAuditSources is additive and ignores empty names', () => {
+        registerAuditSources('kafka');
+        registerAuditSources('grpc', '');
+        expect(isKnownSource('kafka')).toBe(true);
+        expect(isKnownSource('grpc')).toBe(true);
+        expect(isKnownSource('http')).toBe(true);
     });
 
-    it('resetAuditInitiators restores only the built-ins', () => {
-        registerAuditInitiators('kafka');
-        resetAuditInitiators();
-        expect(isKnownInitiator('kafka')).toBe(false);
-        expect(isKnownInitiator('http')).toBe(true);
+    it('resetAuditSources restores only the built-ins', () => {
+        registerAuditSources('kafka');
+        resetAuditSources();
+        expect(isKnownSource('kafka')).toBe(false);
+        expect(isKnownSource('http')).toBe(true);
     });
 
-    describe('resolveInitiator', () => {
+    describe('resolveSource', () => {
         it('resolves a thunk at call time', () => {
-            expect(resolveInitiator(() => 'kafka')).toBe('kafka');
+            registerAuditSources('kafka');
+            expect(resolveSource(() => 'kafka')).toBe('kafka');
+            expect(resolveSource(() => 'cron')).toBe('cron');
         });
 
         it('returns cli for undefined/null', () => {
-            expect(resolveInitiator(undefined as any)).toBe('cli');
-            expect(resolveInitiator(null as any)).toBe('cli');
-            expect(resolveInitiator(() => undefined)).toBe('cli');
+            expect(resolveSource(undefined as any)).toBe('cli');
+            expect(resolveSource(null as any)).toBe('cli');
+            expect(resolveSource(() => undefined)).toBe('cli');
         });
 
-        it('keeps an unregistered value but warns through the logger', () => {
-            const warn = jest.fn();
-            expect(resolveInitiator('kafka', { error: jest.fn(), warn })).toBe('kafka');
-            expect(warn).toHaveBeenCalledWith(expect.stringContaining('kafka'));
-            expect(warn).toHaveBeenCalledWith(expect.stringContaining('registerAuditInitiators'));
+        it('throws for an unregistered value', () => {
+            expect(() => resolveSource('kafka')).toThrow(AuditError);
+            expect(() => resolveSource('kafka')).toThrow('Unknown audit source "kafka"');
+            expect(() => resolveSource('kafka')).toThrow('registerAuditSources');
         });
 
-        it('does not warn for a registered value', () => {
-            const warn = jest.fn();
-            registerAuditInitiators('kafka');
-            expect(resolveInitiator('kafka', { error: jest.fn(), warn })).toBe('kafka');
-            expect(warn).not.toHaveBeenCalled();
+        it('accepts a registered value', () => {
+            registerAuditSources('kafka');
+            expect(resolveSource('kafka')).toBe('kafka');
         });
 
-        it('does not warn for built-in values', () => {
-            const warn = jest.fn();
-            expect(resolveInitiator(AuditInitiator.cron, { error: jest.fn(), warn })).toBe('cron');
-            expect(warn).not.toHaveBeenCalled();
-        });
-
-        it('does not warn when no logger is given', () => {
-            expect(resolveInitiator('kafka')).toBe('kafka');
+        it('accepts built-in values', () => {
+            expect(resolveSource('cron')).toBe('cron');
         });
     });
 });

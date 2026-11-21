@@ -7,7 +7,7 @@ export type { AuditTrailOptions } from './audit_trail.decorator';
 export { AuditTrailInterceptor } from './audit_trail.interceptor';
 
 /**
- * Convenience preset: CLI/cron context with `userId: null` (system record),
+ * Convenience preset: CLI/cron context with `modifiedBy: null` (system record),
  * the shape used by scheduled jobs. Equivalent to `@AuditContext()`.
  */
-export const CronAuditContext = (options: Omit<AuditContextOptions, 'userId'> = {}): MethodDecorator => AuditContext(options);
+export const CronAuditContext = (options: Omit<AuditContextOptions, 'modifiedBy'> = {}): MethodDecorator => AuditContext(options);

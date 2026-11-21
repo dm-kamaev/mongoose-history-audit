@@ -4,7 +4,13 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { AuditTrail, AuditTrailInterceptor, AuditContext, createAuditContextDecorator } from '../../src/nest';
 import { auditTrailPlugin } from '../../src/plugin/audit_trail_plugin';
-import { isAuditEnabled, getAuditUserId, getAuditInitiator } from '../../src/context/user_context';
+import {
+    isAuditEnabled,
+    getAuditModifiedBy,
+    getAuditSource,
+    registerAuditSources,
+    resetAuditSources,
+} from '../../src/context/user_context';
 import { HISTORY_COLLECTION, clean_history, make_schema, model_for, read_history, start_db, stop_db } from '../helpers/db';
 
 jest.setTimeout(120000);
@@ -12,7 +18,7 @@ jest.setTimeout(120000);
 const user_header_id = '64e5faee64e5faee64e5faee';
 
 // userland preset, as documented in the README
-const KafkaAuditContext = createAuditContextDecorator({ initiator: 'kafka' });
+const KafkaAuditContext = createAuditContextDecorator({ source: 'kafka' });
 
 // mimics a gateway guard that parses the `user` header into request.user
 @Injectable()
@@ -44,7 +50,7 @@ class TestService {
     }
 
     async read_context() {
-        return { enabled: isAuditEnabled(), userId: String(getAuditUserId() ?? ''), initiator: getAuditInitiator() };
+        return { enabled: isAuditEnabled(), modifiedBy: String(getAuditModifiedBy() ?? ''), source: getAuditSource() };
     }
 }
 
@@ -77,14 +83,14 @@ class TestController {
     }
 
     @Post('docs-custom-user')
-    @AuditTrail({ getUserId: () => user_header_id })
+    @AuditTrail({ getModifiedBy: () => user_header_id })
     async create_custom_user(@Body('name') name: string) {
         const doc = await this.service.create_doc(name);
         return { id: String(doc._id) };
     }
 
     @Post('cron-doc')
-    @AuditContext({ initiator: 'cron' })
+    @AuditContext({ source: 'cron' })
     async create_via_cron_decorator(@Body('name') name: string) {
         const doc = await this.service.create_doc(name);
         return { id: String(doc._id) };
@@ -137,7 +143,7 @@ describe('NestJS integration (supertest)', () => {
         const records = await read_history({ action: 'created' });
         expect(records).toHaveLength(1);
         expect(String(records[0].modified_by)).toBe(user_header_id);
-        expect(records[0].initiator).toBe('http');
+        expect(records[0].source).toBe('http');
         expect(records[0].changes.name.new).toBe('nest-doc');
     });
 
@@ -163,7 +169,7 @@ describe('NestJS integration (supertest)', () => {
         const res = await request(app.getHttpServer())
             .get('/context')
             .set('user', JSON.stringify({ _id: user_header_id }));
-        expect(res.body).toEqual({ enabled: true, userId: user_header_id, initiator: 'http' });
+        expect(res.body).toEqual({ enabled: true, modifiedBy: user_header_id, source: 'http' });
     });
 
     it('context is disabled outside @AuditTrail handler (no leak between requests)', async () => {
@@ -172,7 +178,7 @@ describe('NestJS integration (supertest)', () => {
         expect(res.body.enabled).toBe(false);
     });
 
-    it('custom getUserId option overrides request.user extraction', async () => {
+    it('custom getModifiedBy option overrides request.user extraction', async () => {
         await request(app.getHttpServer())
             .post('/docs-custom-user')
             .set('user', JSON.stringify({ _id: '000000000000000000000000' }))
@@ -182,19 +188,21 @@ describe('NestJS integration (supertest)', () => {
         expect(String(record.modified_by)).toBe(user_header_id);
     });
 
-    it('@AuditContext sets initiator for CLI-style handlers', async () => {
+    it('@AuditContext sets source for CLI-style handlers', async () => {
         await request(app.getHttpServer()).post('/cron-doc').send({ name: 'cron-doc' });
 
         const [record] = await read_history({ action: 'created' });
-        expect(record.initiator).toBe('cron');
+        expect(record.source).toBe('cron');
         expect(record.modified_by).toBeNull(); // system record
     });
 
-    it('createAuditContextDecorator preset bakes in the initiator', async () => {
+    it('createAuditContextDecorator preset bakes in the source', async () => {
+        registerAuditSources('kafka');
         await request(app.getHttpServer()).post('/kafka-doc').send({ name: 'kafka-doc' });
 
         const [record] = await read_history({ action: 'created' });
-        expect(record.initiator).toBe('kafka');
+        expect(record.source).toBe('kafka');
+        resetAuditSources();
     });
 
     it('concurrent requests keep their own user ids', async () => {

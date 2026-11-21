@@ -1,19 +1,21 @@
 import { Types } from 'mongoose';
 import { auditTrailPlugin } from '../../src/plugin/audit_trail_plugin';
-import { runWithAuditContext, setAuditContextResolver, resetAuditContextResolver } from '../../src/context/user_context';
-import { AuditInitiator, AuditTrailPluginOptions } from '../../src/context/types';
+import {
+    runWithAuditContext,
+    setAuditContextResolver,
+    resetAuditContextResolver,
+    registerAuditSources,
+    resetAuditSources,
+} from '../../src/context/user_context';
+import { AuditTrailPluginOptions } from '../../src/context/types';
 import { HISTORY_COLLECTION, clean_history, make_schema, model_for, read_history, start_db, stop_db } from '../helpers/db';
 
 const options: AuditTrailPluginOptions = { historyCollectionName: HISTORY_COLLECTION };
 const user_a = new Types.ObjectId();
 const user_b = new Types.ObjectId();
 
-function with_context<T>(
-    fn: () => Promise<T>,
-    userId: Types.ObjectId | null = user_a,
-    initiator: AuditInitiator = AuditInitiator.http,
-): Promise<T> {
-    return runWithAuditContext({ enabled: true, userId, initiator }, fn);
+function with_context<T>(fn: () => Promise<T>, modifiedBy: Types.ObjectId | null = user_a, source: string = 'http'): Promise<T> {
+    return runWithAuditContext({ enabled: true, modifiedBy, source }, fn);
 }
 
 describe('auditTrailPlugin (mongodb in memory)', () => {
@@ -27,11 +29,13 @@ describe('auditTrailPlugin (mongodb in memory)', () => {
 
     beforeEach(async () => {
         resetAuditContextResolver();
+        resetAuditSources();
         await clean_history();
     });
 
     afterEach(() => {
         resetAuditContextResolver();
+        resetAuditSources();
     });
 
     function fresh_model(name: string) {
@@ -56,7 +60,7 @@ describe('auditTrailPlugin (mongodb in memory)', () => {
             expect(record.method).toBe('save');
             expect(record.modified_by).toBeInstanceOf(Types.ObjectId);
             expect(String(record.modified_by)).toBe(String(user_a));
-            expect(record.initiator).toBe('http');
+            expect(record.source).toBe('http');
             expect(record.created_at).toBeInstanceOf(Date);
             expect(record.changes.name.new).toBe('first');
             expect(record.changes.priority.new).toBe(1);
@@ -72,14 +76,14 @@ describe('auditTrailPlugin (mongodb in memory)', () => {
         it('writes an updated record with only the changed paths', async () => {
             const Model = fresh_model('SaveUpdate');
             const doc = await with_context(() => Model.create({ name: 'before', priority: 1 }));
-            await with_context(() => Model.findByIdAndUpdate(doc._id, { priority: 2 }), user_b, AuditInitiator.cron);
+            await with_context(() => Model.findByIdAndUpdate(doc._id, { priority: 2 }), user_b, 'cron');
 
             const records = await read_history({ action: 'updated' });
             expect(records).toHaveLength(1);
             expect(records[0].changes.priority).toEqual({ old: 1, new: 2 });
             expect(records[0].changes.name).toBeUndefined();
             expect(String(records[0].modified_by)).toBe(String(user_b));
-            expect(records[0].initiator).toBe('cron');
+            expect(records[0].source).toBe('cron');
         });
 
         it('does not write a record when nothing changed (no-op save)', async () => {
@@ -260,41 +264,42 @@ describe('auditTrailPlugin (mongodb in memory)', () => {
         });
     });
 
-    describe('initiator and modified_by (user_id API)', () => {
-        it('records the userId and initiator from runWithAuditContext', async () => {
+    describe('source and modified_by', () => {
+        it('records the modifiedBy and source from runWithAuditContext', async () => {
             const Model = fresh_model('ContextUser');
-            await with_context(() => Model.create({ name: 'by-user' }), user_b, AuditInitiator.cli);
+            await with_context(() => Model.create({ name: 'by-user' }), user_b, 'cli');
 
             const [record] = await read_history();
             expect(String(record.modified_by)).toBe(String(user_b));
-            expect(record.initiator).toBe('cli');
+            expect(record.source).toBe('cli');
         });
 
-        it('records modified_by null for a system run (no userId)', async () => {
+        it('records modified_by null for a system run (no modifiedBy)', async () => {
             const Model = fresh_model('ContextSystem');
-            await runWithAuditContext({ enabled: true, userId: null, initiator: AuditInitiator.cron }, () => Model.create({ name: 'sys' }));
+            await runWithAuditContext({ enabled: true, modifiedBy: null, source: 'cron' }, () => Model.create({ name: 'sys' }));
 
             const [record] = await read_history();
             expect(record.modified_by).toBeNull();
-            expect(record.initiator).toBe('cron');
+            expect(record.source).toBe('cron');
         });
 
         it('reads the user from a registered resolver when no scoped context is active', async () => {
-            setAuditContextResolver(() => ({ enabled: true, userId: user_a, initiator: AuditInitiator.rabbitmq }));
+            setAuditContextResolver(() => ({ enabled: true, modifiedBy: user_a, source: 'rabbitmq' }));
             const Model = fresh_model('ContextResolver');
             await Model.create({ name: 'via-resolver' });
 
             const [record] = await read_history();
             expect(String(record.modified_by)).toBe(String(user_a));
-            expect(record.initiator).toBe('rabbitmq');
+            expect(record.source).toBe('rabbitmq');
         });
 
-        it('keeps an unregistered initiator string in the record', async () => {
+        it('writes a registered custom source to the record', async () => {
+            registerAuditSources('kafka');
             const Model = fresh_model('ContextKafka');
-            await with_context(() => Model.create({ name: 'kafka' }), user_a, 'kafka' as AuditInitiator);
+            await with_context(() => Model.create({ name: 'kafka' }), user_a, 'kafka');
 
             const [record] = await read_history();
-            expect(record.initiator).toBe('kafka');
+            expect(record.source).toBe('kafka');
         });
     });
 
@@ -362,7 +367,7 @@ describe('auditTrailPlugin (mongodb in memory)', () => {
             const FailingModel = model_for(schema, 'TxAtomicModel');
 
             await connection.transaction(async () => {
-                await runWithAuditContext({ enabled: true, userId: user_a, initiator: AuditInitiator.http }, () =>
+                await runWithAuditContext({ enabled: true, modifiedBy: user_a, source: 'http' }, () =>
                     FailingModel.create({ name: 'atomic' }),
                 );
             });

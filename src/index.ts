@@ -1,4 +1,5 @@
 export * from './context/constants';
+export * from './context/errors';
 export * from './context/types';
 export * from './context/user_context';
 export * from './plugin/deep_diff';

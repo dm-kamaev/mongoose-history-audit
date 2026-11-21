@@ -1,7 +1,7 @@
 import Fastify from 'fastify';
 import { createAuditContextHook } from '../../src/fastify';
 import { auditTrailPlugin } from '../../src/plugin/audit_trail_plugin';
-import { registerAuditInitiators, resetAuditInitiators, resetAuditContextResolver } from '../../src/context/user_context';
+import { registerAuditSources, resetAuditSources, resetAuditContextResolver } from '../../src/context/user_context';
 import { HISTORY_COLLECTION, clean_history, make_schema, model_for, read_history, start_db, stop_db } from '../helpers/db';
 
 jest.setTimeout(120000);
@@ -53,7 +53,7 @@ describe('Fastify integration', () => {
 
     beforeEach(async () => {
         resetAuditContextResolver();
-        resetAuditInitiators();
+        resetAuditSources();
         await clean_history();
     });
 
@@ -69,7 +69,7 @@ describe('Fastify integration', () => {
         const records = await read_history({ action: 'created' });
         expect(records).toHaveLength(1);
         expect(String(records[0].modified_by)).toBe(user_header_id);
-        expect(records[0].initiator).toBe('http');
+        expect(records[0].source).toBe('http');
         expect(records[0].changes.name.new).toBe('fastify-doc');
     });
 
@@ -119,12 +119,12 @@ describe('Fastify integration', () => {
         expect(by_name.get('y')).toBe(user_y);
     });
 
-    it('custom getUserId extracts the person who changed the data', async () => {
+    it('custom getModifiedBy extracts the person who changed the data', async () => {
         const custom_fastify = Fastify();
         custom_fastify.addHook(
             'onRequest',
             createAuditContextHook({
-                getUserId: (req: any) => req.headers['x-account-id'],
+                getModifiedBy: (req: any) => req.headers['x-account-id'],
             }),
         );
         custom_fastify.post('/docs', async (req: any) => {
@@ -145,18 +145,17 @@ describe('Fastify integration', () => {
         await custom_fastify.close();
     });
 
-    it('unregistered initiator passes through with the default http channel', async () => {
+    it('uses the default http channel when no source option is given', async () => {
         await fastify.inject({ method: 'POST', url: '/docs', payload: { name: 'init' } });
         const [record] = await read_history({ action: 'created' });
-        expect(record.initiator).toBe('http');
+        expect(record.source).toBe('http');
     });
 
-    it('registered custom initiator is accepted without warnings', async () => {
-        const warn = jest.fn();
-        registerAuditInitiators('kafka');
+    it('registered custom source is accepted', async () => {
+        registerAuditSources('kafka');
 
         const kafka_fastify = Fastify();
-        kafka_fastify.addHook('onRequest', createAuditContextHook({ initiator: 'kafka' }));
+        kafka_fastify.addHook('onRequest', createAuditContextHook({ source: 'kafka' }));
         kafka_fastify.post('/docs', async () => {
             await Model.create({ name: 'kafka-doc' });
             return { ok: true };
@@ -164,10 +163,21 @@ describe('Fastify integration', () => {
         await kafka_fastify.ready();
 
         await kafka_fastify.inject({ method: 'POST', url: '/docs', payload: {} });
-        void warn;
 
         const [record] = await read_history({ action: 'created' });
-        expect(record.initiator).toBe('kafka');
+        expect(record.source).toBe('kafka');
         await kafka_fastify.close();
+    });
+
+    it('rejects an unregistered source', async () => {
+        const bad_fastify = Fastify();
+        bad_fastify.addHook('onRequest', createAuditContextHook({ source: 'nope' }));
+        bad_fastify.post('/docs', async () => ({ ok: true }));
+        await bad_fastify.ready();
+
+        const res = await bad_fastify.inject({ method: 'POST', url: '/docs', payload: {} });
+        expect(res.statusCode).toBe(500);
+        expect(await read_history()).toHaveLength(0);
+        await bad_fastify.close();
     });
 });
