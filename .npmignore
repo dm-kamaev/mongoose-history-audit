@@ -1,0 +1,22 @@
+# Dev-only files. package.json "files" already whitelists dist/,
+# this list protects the tarball if that field is ever removed.
+source/
+test/
+coverage/
+badges/
+node_modules/
+.github/
+*.tgz
+.env
+
+# tooling config — not needed by consumers
+tsconfig.json
+tsconfig.build.json
+jest.config.js
+eslint.config.mjs
+.prettierrc
+.coveragebadgesrc
+coveragebadgesrc
+Makefile
+opencode.json
+context7.json

@@ -1,0 +1,14 @@
+{
+    "$schema": "https://context7.com/schema/context7.json",
+    "projectTitle": "Mongoose History Audit",
+    "description": "Mongoose plugin that intercepts document changes and writes an audit trail (diff history) to a dedicated collection, with AsyncLocalStorage context for tracking who changed the data. Supports NestJS decorators and Fastify hooks.",
+    "excludeFolders": ["source", "test", "node_modules", "dist", "coverage"],
+    "excludeFiles": ["Makefile", "eslint.config.mjs"],
+    "rules": [
+        "History collection document fields are snake_case (collection_name, document_id, modified_by, created_at)",
+        "Internal functions and files use snake_case; the public API (exports, options) uses camelCase",
+        "Set the user who changed the data via runWithAuditContext, withHistoryUser, or the framework interceptors",
+        "Register custom initiator channels (e.g. 'kafka') with registerAuditInitiators before use",
+        "Transactions require mongoose transactionAsyncLocalStorage for automatic session pickup"
+    ]
+}
