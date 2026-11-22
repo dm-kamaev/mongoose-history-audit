@@ -10,7 +10,8 @@ jobs:
         runs-on: ubuntu-latest
         strategy:
             matrix:
-                node-version: [22, 24]
+                # Node 22 is EOL (Apr 2026) and Jest 30 needs Node 24.9+ for require(esm)
+                node-version: [24]
         steps:
             - uses: actions/checkout@v4
             - uses: actions/setup-node@v4
