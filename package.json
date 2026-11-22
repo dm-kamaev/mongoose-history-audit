@@ -54,16 +54,16 @@
         "node": ">=20"
     },
     "scripts": {
-        "build": "tsc -p tsconfig.build.json",
-        "typecheck": "tsc --noEmit",
-        "test": "NODE_OPTIONS=--experimental-vm-modules jest",
-        "test:cov": "NODE_OPTIONS=--experimental-vm-modules jest --coverage",
-        "badge": "coverage-badges",
-        "lint": "eslint \"src/**/*.ts\" \"test/**/*.ts\" --max-warnings=0",
-        "lint:fix": "eslint \"src/**/*.ts\" \"test/**/*.ts\" --fix",
-        "prettier": "prettier --write .",
-        "check": "prettier --check .",
-        "prepublishOnly": "npm run lint && npm run typecheck && npm run test:cov && npm run build"
+        "build": "make build",
+        "typecheck": "make typecheck",
+        "test": "make test",
+        "test:cov": "make test",
+        "badge": "make badge",
+        "lint": "make lint",
+        "lint:fix": "make lint-fix",
+        "prettier": "make prettier",
+        "check": "make check",
+        "prepublishOnly": "make lint typecheck test build"
     },
     "repository": {
         "type": "git",
