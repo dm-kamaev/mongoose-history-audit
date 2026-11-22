@@ -1,5 +1,13 @@
-publish:
-	npm publish --access public
+ci: install lint typecheck test
+
+install:
+	npm ci
+
+lint:
+	npm run lint
+
+typecheck:
+	npm run typecheck
 
 test:
 	npm run test:cov
@@ -7,4 +15,7 @@ test:
 badge: test
 	npx coverage-badges
 
-.PHONY: test badge publish
+publish:
+	npm publish --access public
+
+.PHONY: ci install lint typecheck test badge publish

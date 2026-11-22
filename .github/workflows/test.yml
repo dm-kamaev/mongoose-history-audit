@@ -17,10 +17,7 @@ jobs:
               with:
                   node-version: ${{ matrix.node-version }}
                   cache: npm
-            - run: npm ci
-            - run: npm run lint
-            - run: npm run typecheck
-            - run: npm run test:cov
+            - run: make ci
             - uses: actions/upload-artifact@v4
               if: matrix.node-version == 24
               with:
