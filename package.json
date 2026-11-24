@@ -24,7 +24,7 @@
         "document",
         "schema",
         "nestjs",
-        "fastify",
+        "fastifyjs",
         "async-local-storage",
         "modified-by",
         "who-changed"
@@ -60,7 +60,7 @@
         "test:cov": "make test",
         "badge": "make badge",
         "lint": "make lint",
-        "lint:fix": "make lint-fix",
+        "lint:fix": "make lint.fix",
         "prettier": "make prettier",
         "check": "make check",
         "prepublishOnly": "make lint typecheck test build"

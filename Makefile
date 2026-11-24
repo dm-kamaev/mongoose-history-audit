@@ -8,7 +8,7 @@ install:
 lint:
 	eslint "src/**/*.ts" "test/**/*.ts" --max-warnings=0
 
-lint-fix:
+lint.fix:
 	eslint "src/**/*.ts" "test/**/*.ts" --fix
 
 typecheck:
