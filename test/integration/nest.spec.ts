@@ -4,13 +4,7 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { AuditTrail, AuditTrailInterceptor, AuditContext, createAuditContextDecorator } from '../../src/nest';
 import { auditTrailPlugin } from '../../src/plugin/audit_trail_plugin';
-import {
-    isAuditEnabled,
-    getAuditModifiedBy,
-    getAuditSource,
-    registerAuditSources,
-    resetAuditSources,
-} from '../../src/context/user_context';
+import { isAuditEnabled, getAuditModifiedBy, getAuditSource, resetAuditSources } from '../../src/context/user_context';
 import { HISTORY_COLLECTION, clean_history, make_schema, model_for, read_history, start_db, stop_db } from '../helpers/db';
 
 jest.setTimeout(120000);
@@ -196,8 +190,7 @@ describe('NestJS integration (supertest)', () => {
         expect(record.modified_by).toBeNull(); // system record
     });
 
-    it('createAuditContextDecorator preset bakes in the source', async () => {
-        registerAuditSources('kafka');
+    it('createAuditContextDecorator preset bakes in the source and self-registers it', async () => {
         await request(app.getHttpServer()).post('/kafka-doc').send({ name: 'kafka-doc' });
 
         const [record] = await read_history({ action: 'created' });

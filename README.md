@@ -8,7 +8,7 @@ Mongoose plugin that intercepts document changes and writes an **audit trail** (
 
 - Records `created` / `updated` / `deleted` actions with field-level diffs
 - `modified_by` — the id of the person who changed the data
-- `source` — the channel that produced the change (`http`, `cron`, `cli`, `rabbitmq`, or your own, registered via `registerAuditSources()`)
+- `source` — the channel that produced the change (`http`, `cron`, `cli`, `rabbitmq`, `rpc`, `ws`, `graphql`, or your own, registered via `registerAuditSources()`)
 - Transaction-safe: history commits (or aborts) together with the data
 - Zero runtime dependencies
 
@@ -90,7 +90,7 @@ class UserController {
     create() { ... }
 
     @Patch(':id')
-    @AuditTrail({ getModifiedBy: req => req.accountId }) // custom extraction
+    @AuditTrail({ getModifiedBy: ctx => ctx.switchToHttp().getRequest().accountId }) // custom extraction
     update() { ... }
 }
 ```
@@ -132,6 +132,93 @@ import { AuditContext } from 'mongoose-history-audit/nest';
 async archive() { ... } // modified_by: null (system record)
 ```
 
+## Custom transports (gRPC / GraphQL / WS)
+
+The same interceptor covers every Nest transport — it reads `context.getType()`
+and builds the audit context per type:
+
+| Transport                    | `source` default | `modifiedBy` default                                     |
+| ---------------------------- | ---------------- | -------------------------------------------------------- |
+| `http`                       | `http`           | `request.user._id ?? request.user.id ?? null`            |
+| `graphql`                    | `graphql`        | same, from the Apollo `{ req }` context (resolver arg 3) |
+| `rpc` (gRPC, NATS, Kafka, …) | `rpc`            | `null` — system record                                   |
+| `ws`                         | `ws`             | `null` — system record                                   |
+
+Auth extraction is application policy, so outside HTTP the default is an honest
+`null` and the option does the work — `getModifiedBy` receives the whole
+`ExecutionContext`:
+
+```ts
+// gRPC — read a metadata header (Metadata.get() returns string[])
+@GrpcMethod('AccountService', 'CreateAccount')
+@AuditTrail({ getModifiedBy: ctx => ctx.switchToRpc().getContext()?.get('authorization')?.[0] ?? null })
+handle(request) { ... }
+
+// WebSocket — read the message or handshake
+@SubscribeMessage('update')
+@AuditTrail({ getModifiedBy: ctx => ctx.switchToWs().getData()?.user_id ?? null })
+update() { ... }
+
+// GraphQL — { req } comes from the Apollo context
+@Mutation(() => Post)
+@AuditTrail({ getModifiedBy: ctx => ctx.getArgs()[2]?.req?.user?.id ?? null })
+createPost() { ... }
+```
+
+Notes: guards run before interceptors, so `request.user` set by an auth guard is
+already visible for HTTP; the option may sit on the **class** (Reflector falls
+back from method to controller) and `source` must be registered when it is not
+built in — see [Extending sources](#extending-sources).
+
+### Reusable preset decorator
+
+To avoid repeating the extraction boilerplate on every route, bake it once —
+the factory self-registers the `source` it contains:
+
+```ts
+import { GrpcMethod } from '@nestjs/microservices';
+import { createAuditTrailDecorator } from 'mongoose-history-audit/nest';
+
+// one preset per channel: baked source + auth extraction from gRPC metadata
+const GrpcFrontAuditTrail = createAuditTrailDecorator({
+    source: 'grpc-front',
+    getModifiedBy: ctx => ctx.switchToRpc().getContext()?.get('authorization')?.[0] ?? null,
+});
+
+class AccountGrpcService {
+    @GrpcMethod('AccountService', 'CreateAccount')
+    @GrpcFrontAuditTrail()
+    handle(request: CreateAccountRequest) { ... }
+
+    // per-call options still override the baked defaults (shallow merge)
+    @GrpcMethod('AccountService', 'CreateAccountAdmin')
+    @GrpcFrontAuditTrail({ source: 'admin' })
+    other(request: CreateAccountRequest) { ... }
+}
+```
+
+### Subclassing — add or change a transport
+
+`protected createAuditContext()` is the single extension seam. Always fall
+through to `super` for the transports you don't handle:
+
+```ts
+@Injectable()
+class AuditTrailInterceptor extends NestAuditTrailInterceptor {
+    protected createAuditContext(context: ExecutionContext, options?: AuditTrailOptions) {
+        if (context.getType() === 'rpc') {
+            return { enabled: true, modifiedBy: 'my-extraction', source: 'grpc' };
+        }
+        return super.createAuditContext(context, options);
+    }
+}
+// main.ts — subclasses resolve exactly like the base:
+app.useGlobalInterceptors(app.get(AuditTrailInterceptor));
+```
+
+The anti-leak logic in `intercept()` (disabled context for undecorated
+handlers, ALS scoping) is intentionally **not** overridable.
+
 ## Public API
 
 ### `mongoose-history-audit` (core)
@@ -156,14 +243,15 @@ Types: `AuditContext`, `AuditSource`, `AuditRecord`, `AuditAction`, `AuditChange
 
 ### `mongoose-history-audit/nest`
 
-| Export                                  | Description                                                                     |
-| --------------------------------------- | ------------------------------------------------------------------------------- |
-| `@AuditTrail(options?)`                 | Method/class decorator — audits the handler, `modifiedBy` read from the request |
-| `@AuditContext(options?)`               | Method decorator — manual context for CLI/cron (default `source: 'cli'`)        |
-| `createAuditContextDecorator(defaults)` | Factory for named preset decorators                                             |
-| `CronAuditContext(options?)`            | Preset: `@AuditContext` without `modifiedBy`                                    |
-| `AuditTrailInterceptor`                 | Global interceptor — **required** for `@AuditTrail` to take effect              |
-| `AUDIT_TRAIL_KEY`                       | Metadata key read by the interceptor (Reflector)                                |
+| Export                                  | Description                                                                                         |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `@AuditTrail(options?)`                 | Method/class decorator — audits the handler on any transport (`getModifiedBy(ctx)`, `source`)       |
+| `@AuditContext(options?)`               | Method decorator — manual context for CLI/cron (default `source: 'cli'`)                            |
+| `createAuditContextDecorator(defaults)` | Factory for named preset `@AuditContext` decorators (baked string `source` self-registers)          |
+| `createAuditTrailDecorator(defaults)`   | Factory for named preset `@AuditTrail` decorators (baked string `source` self-registers)            |
+| `CronAuditContext(options?)`            | Preset: `@AuditContext` without `modifiedBy`                                                        |
+| `AuditTrailInterceptor`                 | Global interceptor — **required** for `@AuditTrail`; extend it via `protected createAuditContext()` |
+| `AUDIT_TRAIL_KEY`                       | Metadata key read by the interceptor (Reflector)                                                    |
 
 Types: `AuditContextOptions`, `AuditTrailOptions`.
 
@@ -227,12 +315,12 @@ By default `__v`, root `_id`, and `created_at`/`updated_at`/`createdAt`/`updated
 
 ## Extending sources
 
-The source is a plain open string. Built-ins (`http`, `cron`, `cli`, `rabbitmq`) are pre-registered; a custom channel must be registered at startup or any use **throws**:
+The source is a plain open string. Built-ins (`http`, `cron`, `cli`, `rabbitmq`, `rpc`, `ws`, `graphql`) are pre-registered; a custom channel must be registered at startup or any use **throws** — except when it is baked into a preset factory (see below), which registers it for you:
 
 ```ts
 import { registerAuditSources } from 'mongoose-history-audit';
 
-registerAuditSources('kafka', 'grpc'); // once, at application startup
+registerAuditSources('kafka', 'grpc'); // once, at application startup (direct API use)
 
 await runWithAuditContext(
     { enabled: true, modifiedBy, source: 'kafka' }, // ok — registered
@@ -248,13 +336,31 @@ await runWithAuditContext(
 ### Named preset decorators (NestJS)
 
 ```ts
-import { createAuditContextDecorator } from 'mongoose-history-audit/nest';
+import { GrpcMethod } from '@nestjs/microservices';
+import { createAuditContextDecorator, createAuditTrailDecorator } from 'mongoose-history-audit/nest';
 
 const KafkaAuditContext = createAuditContextDecorator({ source: 'kafka' });
 
 @KafkaAuditContext({ modifiedBy }) // per-call options override baked-in defaults
 async handle(msg) { ... }
+
+// reusable @AuditTrail preset — baked channel + auth extraction for one gRPC front service
+const GrpcFrontAuditTrail = createAuditTrailDecorator({
+    source: 'grpc-front',
+    getModifiedBy: ctx => ctx.switchToRpc().getContext()?.get('authorization')?.[0] ?? null,
+});
+
+class AccountGrpcService {
+    @GrpcMethod('AccountService', 'CreateAccount')
+    @GrpcFrontAuditTrail()
+    handle(request: CreateAccountRequest) { ... }
+}
 ```
+
+A string `source` written into a preset (factory defaults or a per-call override)
+**registers itself** — no `registerAuditSources()` call needed. Thunk sources
+(`() => process.env.HISTORY_SOURCE`) still resolve at runtime and must be
+registered normally.
 
 ## Transactions
 

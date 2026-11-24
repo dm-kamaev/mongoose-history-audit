@@ -23,7 +23,7 @@ let resolver: AuditContextResolver | undefined;
 
 const scoped_context = new AsyncLocalStorage<AuditContext>();
 
-const BUILT_IN_SOURCES = ['http', 'cron', 'cli', 'rabbitmq'];
+const BUILT_IN_SOURCES = ['http', 'cron', 'cli', 'rabbitmq', 'rpc', 'ws', 'graphql'];
 
 const known_sources = new Set<string>(BUILT_IN_SOURCES);
 

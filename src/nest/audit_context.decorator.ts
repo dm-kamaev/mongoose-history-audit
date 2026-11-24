@@ -1,5 +1,5 @@
 import { AuditSource } from '../context/types';
-import { resolveSource, runWithAuditContext } from '../context/user_context';
+import { registerAuditSources, resolveSource, runWithAuditContext } from '../context/user_context';
 
 export interface AuditContextOptions {
     source?: AuditSource | (() => AuditSource | string | undefined);
@@ -44,7 +44,9 @@ export function AuditContext(options: AuditContextOptions = {}): MethodDecorator
 
 /**
  * Creates a named preset decorator with baked-in `AuditContext` defaults.
- * Per-call options override the baked-in defaults (shallow merge):
+ * Per-call options override the baked-in defaults (shallow merge).
+ * A string `source` written into the factory or a per-call override
+ * registers itself — no separate `registerAuditSources()` call:
  *
  * ```ts
  * const KafkaAuditContext = createAuditContextDecorator({ source: 'kafka' });
@@ -53,5 +55,11 @@ export function AuditContext(options: AuditContextOptions = {}): MethodDecorator
  * ```
  */
 export function createAuditContextDecorator(defaults: AuditContextOptions): (options?: AuditContextOptions) => MethodDecorator {
-    return (options: AuditContextOptions = {}) => AuditContext({ ...defaults, ...options });
+    return (options: AuditContextOptions = {}) => {
+        const merged = { ...defaults, ...options };
+        if (typeof merged.source === 'string') {
+            registerAuditSources(merged.source);
+        }
+        return AuditContext(merged);
+    };
 }
